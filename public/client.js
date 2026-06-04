@@ -239,20 +239,23 @@ webDeafBtn.onclick = () => {
 socket.on('signal', (data) => {
     if (isDeafened) return; // لا نربط إشارات صوتية إذا كان معزولاً
     if (!peers[data.from]) {
-        addLog("توصيل بث صوتي ثلاثي الأبعاد مع لاعب قريب...", "system");
+        addLog("توصيل بث صوتي ثلاثي الأبعاد مع لاعب...", "system");
         peers[data.from] = createPeer(data.from, false);
     }
     peers[data.from].signal(data.signal);
 });
 
-// تحديث المواقع وعرض اللاعبين القريبين وحساب الصوت المحيطي
+// تحديث المواقع وعرض اللاعبين القريبين وحساب الصوت المحيطي والراديو
 socket.on('positions_updated', (allPlayers) => {
     if (!myUserId || !allPlayers[myUserId]) return;
     
-    const myPos = allPlayers[myUserId].pos;
+    const myState = allPlayers[myUserId];
+    const myPos = myState.pos;
+    const myFreq = myState.frequency;
+    
     const nearbyList = [];
     
-    // فلترة وحساب اللاعبين القريبين
+    // فلترة وحساب اللاعبين القريبين والمتصلين بالراديو
     Object.values(allPlayers).forEach(player => {
         if (player.userId === myUserId || !player.socketId) return;
         
@@ -262,28 +265,52 @@ socket.on('positions_updated', (allPlayers) => {
             Math.pow(player.pos.z - myPos.z, 2)
         );
 
-        if (d < 60) {
-            nearbyList.push({
-                userId: player.userId,
-                socketId: player.socketId,
-                distance: Math.floor(d)
-            });
+        const isNearby = (d < 60);
+        const onSameRadio = (myFreq && myFreq === player.frequency);
 
-            // إنشاء Peer إذا كنت البادئ (المقارنة بالـ ID تمنع التوصيل المزدوج)
+        if (isNearby || onSameRadio) {
+            // إدراج اللاعبين القريبين في واجهة المتصفح فقط
+            if (isNearby) {
+                nearbyList.push({
+                    userId: player.userId,
+                    socketId: player.socketId,
+                    distance: Math.floor(d)
+                });
+            }
+
+            // إنشاء Peer إذا لم يكن موجوداً
             if (!peers[player.socketId] && socket.id < player.socketId) {
-                addLog(`بدء الاتصال الصوتي مع اللاعب ${player.userId}...`, "system");
+                addLog(`بدء الاتصال الصوتي مع اللاعب ${player.userId} (محيطي/راديو)...`, "system");
                 peers[player.socketId] = createPeer(player.socketId, true);
             }
 
-            // تعديل الصوت المحيطي بناء على المسافة (كلما ابتعد خف الصوت)
+            // حساب مستوى الصوت للقرين
+            let volume = 0;
+            if (isNearby) {
+                // صوت محيطي طبيعي إذا لم يكن مكتوماً
+                if (!player.isMuted) {
+                    volume = Math.pow(Math.max(0, 1 - (d / 60)), 0.6);
+                }
+            }
+            
+            if (onSameRadio) {
+                // صوت الراديو يعمل بكامل القوة إذا كان المتحدث يضغط زر التحدث PTT وغير مكتوم
+                if (player.isTransmitting && !player.isMuted) {
+                    volume = 1.0;
+                }
+            }
+
+            if (isDeafened) {
+                volume = 0;
+            }
+
             if (peers[player.socketId] && peers[player.socketId].audioElement) {
-                const vol = Math.pow(Math.max(0, 1 - (d / 60)), 0.6); // صيغة خفض الصوت المحيطي
-                peers[player.socketId].audioElement.volume = isDeafened ? 0 : vol;
+                peers[player.socketId].audioElement.volume = volume;
             }
         } else {
-            // حذف اللاعب إذا ابتعد عن النطاق
+            // حذف الاتصال إذا ابتعد اللاعب وليس على نفس موجة الراديو
             if (peers[player.socketId]) {
-                addLog(`ابتعد اللاعب ${player.userId} عن نطاقك الصوتي.`, "warning");
+                addLog(`قطع الاتصال الصوتي مع اللاعب ${player.userId}.`, "warning");
                 destroyPeer(player.socketId);
             }
         }
@@ -306,7 +333,15 @@ function createPeer(targetId, initiator) {
         initiator: initiator,
         stream: myStream || undefined,
         trickle: false,
-        config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }
+        config: { 
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'stun:stun2.l.google.com:19302' },
+                { urls: 'stun:stun3.l.google.com:19302' },
+                { urls: 'stun:stun4.l.google.com:19302' }
+            ]
+        }
     });
 
     peer.on('signal', (sig) => {
