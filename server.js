@@ -35,12 +35,17 @@ app.post('/update', (req, res) => {
     const { players } = req.body;
     let pendingList = [];
     let states = {};
+    let radioMembers = {};
 
     if (players) {
         players.forEach(p => {
-            // تحديث موقع اللاعب إذا كان مرتبطاً بالمتصفح
+            // تحديث موقع وبيانات اللاعب إذا كان مرتبطاً بالمتصفح
             if (playersData[p.userId]) {
                 playersData[p.userId].pos = p.pos;
+                playersData[p.userId].frequency = p.frequency;
+                playersData[p.userId].callsign = p.callsign;
+                playersData[p.userId].isTransmitting = !!p.isTransmitting;
+
                 states[p.userId] = {
                     isMuted: !!playersData[p.userId].isMuted,
                     isDeafened: !!playersData[p.userId].isDeafened
@@ -54,12 +59,33 @@ app.post('/update', (req, res) => {
                 });
             }
         });
+
+        // تجميع قائمة المتصلين بالراديو لكل لاعب
+        players.forEach(p => {
+            const playerState = playersData[p.userId];
+            if (playerState && playerState.frequency) {
+                const myFreq = playerState.frequency;
+                const members = Object.values(playersData)
+                    .filter(other => other.userId !== p.userId && other.frequency === myFreq)
+                    .map(other => ({
+                        userId: other.userId,
+                        callsign: other.callsign || `لاعب ${other.userId}`,
+                        isTransmitting: !!other.isTransmitting
+                    }));
+                radioMembers[p.userId] = members;
+            }
+        });
     }
 
     // إرسال التحديثات لجميع المتصفحات المتصلة بالمايك
     io.emit('positions_updated', playersData);
 
-    res.json({ success: true, pendingLinks: pendingList, states: states });
+    res.json({ 
+        success: true, 
+        pendingLinks: pendingList, 
+        states: states,
+        radioMembers: radioMembers
+    });
 });
 
 // 3. استقبال موافقة أو رفض الربط من روبلوكس
@@ -75,7 +101,10 @@ app.post('/confirm_link', (req, res) => {
                 pos: { x: 0, y: 0, z: 0 },
                 userId: userId,
                 isMuted: false,
-                isDeafened: false
+                isDeafened: false,
+                frequency: null,
+                callsign: "",
+                isTransmitting: false
             };
 
             // إعلام المتصفح بالنجاح
@@ -142,6 +171,19 @@ app.post('/toggle_deafen', (req, res) => {
     }
     res.status(404).json({ success: false });
 });
+
+// 8. التحكم بالإرسال السريع للراديو (Push-to-Talk) من روبلوكس
+app.post('/toggle_ptt', (req, res) => {
+    const { userId, transmitting } = req.body;
+    if (playersData[userId]) {
+        playersData[userId].isTransmitting = !!transmitting;
+        // بث التحديث فوراً لجميع المتصفحات المتصلة لتقليل زمن استجابة الصوت
+        io.emit('positions_updated', playersData);
+        return res.json({ success: true });
+    }
+    res.status(404).json({ success: false });
+});
+
 
 
 // --- [ منطق اتصال الـ Socket للموقع ] ---
