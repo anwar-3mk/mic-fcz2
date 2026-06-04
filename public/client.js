@@ -102,8 +102,16 @@ startBtn.onclick = async () => {
         // إرسال طلب الربط للسيرفر
         socket.emit('link_account', code);
     } catch (err) {
-        addLog("فشل الوصول للمايكروفون. يرجى السماح بالمايك ليعمل النظام.", "error");
-        alert("يجب السماح بالوصول للمايكروفون للاتصال بالنظام.");
+        addLog("⚠️ فشل الوصول للمايكروفون (قد يكون غير مدعوم على هذا الجهاز).", "warning");
+        const confirmListen = confirm("فشل تشغيل المايكروفون (جهازك قد لا يدعم الوصول للمايك في المتصفح مثل PlayStation).\n\nهل تريد الاتصال في 'وضع الاستماع فقط' لتسمع الآخرين دون التحدث؟");
+        if (confirmListen) {
+            myStream = null; // لا يوجد مايكروفون
+            setMuteState(true); // كتم افتراضي
+            addLog("تم تفعيل وضع الاستماع فقط 🔇 (تستمع للآخرين ولا يمكنهم سماعك)", "success");
+            socket.emit('link_account', code);
+        } else {
+            addLog("تم إلغاء الاتصال لعدم توفر صلاحية المايك.", "error");
+        }
     }
 };
 
@@ -207,6 +215,11 @@ function setDeafenState(deafened) {
 
 // الضغط على أزرار المتصفح
 webMicBtn.onclick = () => {
+    if (!myStream) {
+        addLog("❌ لا يمكنك إلغاء الكتم في وضع الاستماع فقط لعدم وجود مايكروفون.", "error");
+        alert("المايكروفون غير متصل أو غير مدعوم في هذا المتصفح (وضع الاستماع فقط).");
+        return;
+    }
     const newState = !isMuted;
     setMuteState(newState);
     socket.emit('client_mute_toggle', newState);
@@ -291,7 +304,7 @@ socket.on('player_disconnected', (socketId) => {
 function createPeer(targetId, initiator) {
     const peer = new SimplePeer({
         initiator: initiator,
-        stream: myStream,
+        stream: myStream || undefined,
         trickle: false,
         config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] }
     });
