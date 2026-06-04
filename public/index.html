@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>نظام المايك الاحترافي - Web Pro V4</title>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Noto+Kufi+Arabic:wght@300;500;700;900&display=swap" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Scripts -->
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/simple-peer/9.11.1/simplepeer.min.js"></script>
+    <!-- Stylesheet -->
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <div class="background-decor">
+        <div class="circle circle-1"></div>
+        <div class="circle circle-2"></div>
+    </div>
+
+    <div class="app-container">
+        <!-- الواجهة الرئيسية -->
+        <div class="premium-card">
+            <!-- الهيدر -->
+            <div class="card-header">
+                <div class="status-pulse-container">
+                    <div class="status-pulse" id="globalPulse"></div>
+                    <i class="fa-solid fa-microphone-lines status-icon"></i>
+                </div>
+                <h2>نظام المايك الاحترافي</h2>
+                <p class="subtitle">صوت محيطي تفاعلي ثلاثي الأبعاد</p>
+            </div>
+
+            <!-- لوحة إدخال الكود (Setup Panel) -->
+            <div class="panel-section show" id="setupPanel">
+                <div class="input-container">
+                    <label for="linkCode">أدخل كود الربط المكون من 4 أرقام</label>
+                    <input type="text" id="linkCode" maxlength="4" placeholder="0 0 0 0" autocomplete="off">
+                </div>
+                <button class="action-btn" id="startBtn">
+                    <span>تفعيل الاتصال الآمن</span>
+                    <i class="fa-solid fa-arrow-left"></i>
+                </button>
+            </div>
+
+            <!-- لوحة انتظار التأكيد (Pending Panel) -->
+            <div class="panel-section" id="pendingPanel">
+                <div class="loading-container">
+                    <div class="loading-spinner"></div>
+                    <h3>بانتظار الموافقة</h3>
+                    <p id="pendingText">يرجى القبول من نافذة التأكيد المنبثقة داخل لعبة روبلوكس.</p>
+                </div>
+                <button class="cancel-btn" id="cancelPendingBtn">إلغاء الطلب</button>
+            </div>
+
+            <!-- لوحة الاتصال النشط (Active Dashboard) -->
+            <div class="panel-section" id="activePanel">
+                <div class="connection-status">
+                    <i class="fa-solid fa-circle-check"></i>
+                    <span>متصل باللعبة بنجاح</span>
+                </div>
+
+                <!-- أزرار التحكم الفخمة -->
+                <div class="controls-grid">
+                    <button class="control-toggle" id="webMicBtn">
+                        <div class="icon-wrapper">
+                            <i class="fa-solid fa-microphone"></i>
+                        </div>
+                        <span class="label">المايكروفون</span>
+                        <span class="status-lbl green" id="micStatusLbl">مفتوح</span>
+                    </button>
+
+                    <button class="control-toggle" id="webDeafBtn">
+                        <div class="icon-wrapper">
+                            <i class="fa-solid fa-headphones"></i>
+                        </div>
+                        <span class="label">عزل الصوت</span>
+                        <span class="status-lbl red" id="deafStatusLbl">ملغي</span>
+                    </button>
+                </div>
+
+                <!-- شريط مؤشر الصوت التفاعلي (Mic Bar) -->
+                <div class="visualizer-container">
+                    <div class="visualizer-header">
+                        <span>مؤشر التقاط الصوت</span>
+                        <span id="dBValue">0%</span>
+                    </div>
+                    <div class="progress-track">
+                        <div class="progress-bar" id="micProgressBar"></div>
+                    </div>
+                </div>
+
+                <!-- قائمة اللاعبين القريبين -->
+                <div class="players-section">
+                    <h4>اللاعبين في المحيط الصوتي</h4>
+                    <div class="players-list" id="playersNearby">
+                        <div class="no-players">
+                            <i class="fa-solid fa-users-slash"></i>
+                            <p>لا يوجد لاعبين قريبين منك حالياً</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- شاشة السجلات (Logs area) -->
+            <div class="logs-section">
+                <div class="logs-header">
+                    <span>سجل النشاطات</span>
+                    <button id="clearLogsBtn"><i class="fa-solid fa-trash-can"></i></button>
+                </div>
+                <div class="logs-body" id="logs">
+                    <div class="log-entry system">النظام بانتظار بدء الاتصال...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- لتخزين ملفات الصوت للمستقبل -->
+    <div id="remote-audios" style="display: none;"></div>
+
+    <script src="client.js"></script>
+</body>
+</html>
