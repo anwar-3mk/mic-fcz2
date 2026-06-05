@@ -215,9 +215,10 @@ function setDeafenState(deafened) {
     isDeafened = deafened;
     
     // كتم/تشغيل جميع الأصوات المستقبلة
-    const audios = document.getElementById('remote-audios').querySelectorAll('audio');
-    audios.forEach(audio => {
-        audio.muted = deafened;
+    Object.values(peers).forEach(peer => {
+        if (peer.audioElement) {
+            peer.audioElement.muted = deafened;
+        }
     });
 
     if (isDeafened) {
@@ -308,39 +309,26 @@ socket.on('positions_updated', (allPlayers) => {
             const mySignal = myState.signalInfo || { closestTowerName: "None", distToTower: 99999, towerPos: {x:0, y:0, z:0} };
             const peerSignal = player.signalInfo || { closestTowerName: "None", distToTower: 99999, towerPos: {x:0, y:0, z:0} };
 
-            // 1. حساب قوة إشارة اللاعب نفسه بناءً على المسافة لأقرب برج (الحد الأقصى 50 بلاطة)
-            let sigA = 0;
-            if (mySignal.closestTowerName !== "None") {
-                if (mySignal.distToTower <= 2.5) {
-                    sigA = 1.0;
-                } else if (mySignal.distToTower <= 50) {
-                    sigA = 1.0 - (mySignal.distToTower - 2.5) / 47.5;
-                }
-            }
+            // التحقق من تواجد اللاعبين معاً داخل الدوائر الحمراء (القطر 5 بلاطات والمدى الأقصى للبرج هو نصف القطر 2.5)
+            const isMyPlayerInCircle = (mySignal.closestTowerName !== "None" && mySignal.distToTower <= 2.5);
+            const isPeerPlayerInCircle = (peerSignal.closestTowerName !== "None" && peerSignal.distToTower <= 2.5);
 
-            // 2. حساب قوة إشارة القرين
-            let sigB = 0;
-            if (peerSignal.closestTowerName !== "None") {
-                if (peerSignal.distToTower <= 2.5) {
-                    sigB = 1.0;
-                } else if (peerSignal.distToTower <= 50) {
-                    sigB = 1.0 - (peerSignal.distToTower - 2.5) / 47.5;
-                }
-            }
-
-            // حساب جودة الرابط الصوتي
+            // حساب جودة الرابط الصوتي للراديو
             let transmissionQuality = 0;
-            if (sigA > 0 && sigB > 0) {
+            if (isMyPlayerInCircle && isPeerPlayerInCircle) {
                 let baseQuality = 1.0;
                 if (mySignal.closestTowerName !== peerSignal.closestTowerName) {
-                    // تقليل جودة الاتصال بناءً على مسافة البرجين عن بعضهما (الحد الأقصى 400 بلاطة)
+                    // تقليل جودة الاتصال بناءً على مسافة البرجين عن بعضهما (الحد الأقصى للتغطية البينية هو 550 بلاطة)
                     let towerDist = Math.sqrt(
                         Math.pow(mySignal.towerPos.x - peerSignal.towerPos.x, 2) +
                         Math.pow(mySignal.towerPos.z - peerSignal.towerPos.z, 2)
                     );
-                    baseQuality = Math.max(0.15, 1.0 - (towerDist / 400));
+                    // جودة تدرجية بين 1.0 (صافي) إلى 0.12 (مغبش لاسلكي وصوت ضعيف ومفهوم بصعوبة)
+                    baseQuality = Math.max(0.12, 1.0 - (towerDist / 550));
                 }
-                transmissionQuality = baseQuality * sigA * sigB;
+                transmissionQuality = baseQuality;
+            } else {
+                transmissionQuality = 0; // مقطوع بالكامل إذا كان أحد الطرفين خارج أي دائرة حمراء
             }
 
             // حساب مستوى الصوت المحيطي الطبيعي (يعمل في أي مكان بشكل مستقل عن الأبراج)
@@ -442,15 +430,15 @@ function createPeer(targetId, initiator) {
         const audio = document.createElement('audio');
         audio.srcObject = stream;
         audio.autoplay = true;
-        audio.volume = 1.0; // نضع الصوت 1.0 لأننا سنقوم بتوجيهه داخل الـ Web Audio API مباشرة ولن يُشغل مرتين
+        audio.volume = 1.0; // نضع الصوت 1.0 ليبقى مسار الميديا نشطاً بالمتصفح
         audio.muted = false;
         
         audio.play().catch(e => console.log("Autoplay blocked, waiting for click."));
-        document.getElementById('remote-audios').appendChild(audio);
+        // تنبيه: لا نلحق عنصر الصوت بالـ DOM مطلقاً لمنع متصفح كروم من تشغيل الصوت الخام وتسريبه
         peer.audioElement = audio;
         
-        // إعداد عقد الـ Web Audio API باستخدام عنصر الصوت بدلاً من الـ stream لتفادي كتم الصوت في متصفح كروم
-        setupPeerAudioNodes(targetId, audio);
+        // إعداد عقد الـ Web Audio API بالبث مباشرة لتجنب كتم الصوت في متصفح كروم والتسريب
+        setupPeerAudioNodes(targetId, stream);
     });
 
     peer.on('error', (err) => {
@@ -465,7 +453,10 @@ function destroyPeer(socketId) {
     if (peers[socketId]) {
         try {
             if (peers[socketId].audioElement) {
-                peers[socketId].audioElement.remove();
+                try {
+                    peers[socketId].audioElement.pause();
+                    peers[socketId].audioElement.srcObject = null;
+                } catch(e) {}
             }
             // فصل العقد ومولد الوشوشة لمنع تسريب الذاكرة دون إغلاق الـ Context العالمي
             if (peers[socketId].audioNodes) {
@@ -486,7 +477,7 @@ function destroyPeer(socketId) {
 }
 
 // دالة بناء فلاتر ومولد الوشوشة التكتيكية للراديو (Web Audio API)
-function setupPeerAudioNodes(peerSocketId, audioElement) {
+function setupPeerAudioNodes(peerSocketId, stream) {
     try {
         if (!audioCtx) {
             audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -495,8 +486,8 @@ function setupPeerAudioNodes(peerSocketId, audioElement) {
             audioCtx.resume();
         }
         
-        // استخدام createMediaElementSource بدلاً من createMediaStreamSource لتجنب كتم الصوت في متصفح كروم
-        const source = audioCtx.createMediaElementSource(audioElement);
+        // استخدام createMediaStreamSource على البث مباشرة
+        const source = audioCtx.createMediaStreamSource(stream);
         
         // 1. فلتر التغبيش وراديو walkie-talkie (نبدأ بنوع allpass ليكون الصوت المحيطي صافياً بالكامل افتراضياً)
         const filter = audioCtx.createBiquadFilter();
@@ -541,7 +532,7 @@ function setupPeerAudioNodes(peerSocketId, audioElement) {
             noiseGain: noiseGain,
             mainGain: mainGain
         };
-        console.log("Audio graph nodes setup successfully for peer using media element:", peerSocketId);
+        console.log("Audio graph nodes setup successfully for peer using stream directly:", peerSocketId);
     } catch (e) {
         console.error("Failed to setup Web Audio nodes for peer:", e);
     }
