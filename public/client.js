@@ -284,6 +284,45 @@ socket.on('positions_updated', (allPlayers) => {
                 peers[player.socketId] = createPeer(player.socketId, true);
             }
 
+            // --- [ حساب جودة إشارة أبراج الراديو ] ---
+            const mySignal = myState.signalInfo || { closestTowerName: "None", distToTower: 99999, towerPos: {x:0, y:0, z:0} };
+            const peerSignal = player.signalInfo || { closestTowerName: "None", distToTower: 99999, towerPos: {x:0, y:0, z:0} };
+
+            // 1. حساب قوة إشارة اللاعب نفسه بناءً على المسافة لأقرب برج (الحد الأقصى 50 بلاطة)
+            let sigA = 0;
+            if (mySignal.closestTowerName !== "None") {
+                if (mySignal.distToTower <= 2.5) {
+                    sigA = 1.0;
+                } else if (mySignal.distToTower <= 50) {
+                    sigA = 1.0 - (mySignal.distToTower - 2.5) / 47.5;
+                }
+            }
+
+            // 2. حساب قوة إشارة القرين
+            let sigB = 0;
+            if (peerSignal.closestTowerName !== "None") {
+                if (peerSignal.distToTower <= 2.5) {
+                    sigB = 1.0;
+                } else if (peerSignal.distToTower <= 50) {
+                    sigB = 1.0 - (peerSignal.distToTower - 2.5) / 47.5;
+                }
+            }
+
+            // حساب جودة الرابط الصوتي
+            let transmissionQuality = 0;
+            if (sigA > 0 && sigB > 0) {
+                let baseQuality = 1.0;
+                if (mySignal.closestTowerName !== peerSignal.closestTowerName) {
+                    // تقليل جودة الاتصال بناءً على مسافة البرجين عن بعضهما (الحد الأقصى 400 بلاطة)
+                    let towerDist = Math.sqrt(
+                        Math.pow(mySignal.towerPos.x - peerSignal.towerPos.x, 2) +
+                        Math.pow(mySignal.towerPos.z - peerSignal.towerPos.z, 2)
+                    );
+                    baseQuality = Math.max(0.15, 1.0 - (towerDist / 400));
+                }
+                transmissionQuality = baseQuality * sigA * sigB;
+            }
+
             // حساب مستوى الصوت للقرين
             let volume = 0;
             if (isNearby) {
@@ -304,8 +343,27 @@ socket.on('positions_updated', (allPlayers) => {
                 volume = 0;
             }
 
-            if (peers[player.socketId] && peers[player.socketId].audioElement) {
-                peers[player.socketId].audioElement.volume = volume;
+            // دمج جودة إشارات الأبراج مع الصوت
+            let finalVolume = volume * transmissionQuality;
+
+            if (peers[player.socketId]) {
+                const nodes = peers[player.socketId].audioNodes;
+                if (nodes) {
+                    // 1. تطبيق الكسب الرئيسي (الصوت النهائي)
+                    nodes.mainGain.gain.value = finalVolume;
+                    
+                    if (finalVolume > 0) {
+                        // 2. فلتر التغبيش (تخفيض الترددات كلما ضعفت الإشارة)
+                        nodes.filter.frequency.value = 600 + (transmissionQuality * 3400);
+                        
+                        // 3. تشغيل صوت التشويش اللاسلكي
+                        nodes.noiseGain.gain.value = (1.0 - transmissionQuality) * 0.04;
+                    } else {
+                        nodes.noiseGain.gain.value = 0;
+                    }
+                } else if (peers[player.socketId].audioElement) {
+                    peers[player.socketId].audioElement.volume = finalVolume;
+                }
             }
         } else {
             // حذف الاتصال إذا ابتعد اللاعب وليس على نفس موجة الراديو
@@ -354,11 +412,14 @@ function createPeer(targetId, initiator) {
         const audio = document.createElement('audio');
         audio.srcObject = stream;
         audio.autoplay = true;
-        audio.muted = isDeafened;
+        audio.muted = true; // نكتم تشغيل التاج العادي لتمريره عبر قنوات الفلاتر لعمل التغبيش والوشوشة
         
         audio.play().catch(e => console.log("Autoplay blocked, waiting for click."));
         document.getElementById('remote-audios').appendChild(audio);
         peer.audioElement = audio;
+        
+        // إعداد عقد الـ Web Audio API للتشويش التكتيكي
+        setupPeerAudioNodes(targetId, stream);
     });
 
     peer.on('error', (err) => {
@@ -375,9 +436,70 @@ function destroyPeer(socketId) {
             if (peers[socketId].audioElement) {
                 peers[socketId].audioElement.remove();
             }
+            // إغلاق عقد الصوت ومولد الوشوشة لمنع تسريب الذاكرة
+            if (peers[socketId].audioNodes) {
+                peers[socketId].audioNodes.noiseSource.stop();
+                peers[socketId].audioNodes.context.close();
+            }
             peers[socketId].destroy();
         } catch (e) {}
         delete peers[socketId];
+    }
+}
+
+// دالة بناء فلاتر ومولد الوشوشة التكتيكية للراديو (Web Audio API)
+function setupPeerAudioNodes(peerSocketId, stream) {
+    try {
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const source = audioCtx.createMediaStreamSource(stream);
+        
+        // 1. فلتر التغبيش وراديو walkie-talkie (Low-pass Filter)
+        const filter = audioCtx.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.value = 4000; // تردد البداية
+        
+        // 2. إنشاء مولد وشوشة راديو لاسلكي (White Noise Buffer)
+        const bufferSize = 2 * audioCtx.sampleRate;
+        const noiseBuffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+        const output = noiseBuffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i++) {
+            output[i] = Math.random() * 2 - 1;
+        }
+        
+        const noiseSource = audioCtx.createBufferSource(noiseBuffer);
+        noiseSource.loop = true;
+        
+        const noiseGain = audioCtx.createGain();
+        noiseGain.gain.value = 0.0; // بدون تشويش في البداية
+        
+        // توصيل الأجهزة
+        noiseSource.connect(noiseGain);
+        
+        // عقدة التحكم في كسب الصوت الرئيسي
+        const mainGain = audioCtx.createGain();
+        mainGain.gain.value = 1.0;
+        
+        // ربط القنوات
+        source.connect(filter);
+        filter.connect(mainGain);
+        noiseGain.connect(mainGain);
+        
+        // التوصيل بسماعة العميل النهائية
+        mainGain.connect(audioCtx.destination);
+        noiseSource.start();
+        
+        // حفظ العقد لتحديثها حيوياً لاحقاً
+        peers[peerSocketId].audioNodes = {
+            context: audioCtx,
+            source: source,
+            filter: filter,
+            noiseSource: noiseSource,
+            noiseGain: noiseGain,
+            mainGain: mainGain
+        };
+        console.log("Audio graph nodes setup successfully for peer:", peerSocketId);
+    } catch (e) {
+        console.error("Failed to setup Web Audio nodes for peer:", e);
     }
 }
 

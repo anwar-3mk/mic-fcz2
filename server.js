@@ -45,6 +45,7 @@ app.post('/update', (req, res) => {
                 playersData[p.userId].frequency = p.frequency;
                 playersData[p.userId].callsign = p.callsign;
                 playersData[p.userId].isTransmitting = !!p.isTransmitting;
+                playersData[p.userId].signalInfo = p.signalInfo; // تخزين معلومات الإشارة والبرج
 
                 states[p.userId] = {
                     isMuted: !!playersData[p.userId].isMuted,
@@ -104,7 +105,8 @@ app.post('/confirm_link', (req, res) => {
                 isDeafened: false,
                 frequency: null,
                 callsign: "",
-                isTransmitting: false
+                isTransmitting: false,
+                signalInfo: { closestTowerName: "None", distToTower: 99999, towerPos: {x:0, y:0, z:0} } // تهيئة افتراضية
             };
 
             // إعلام المتصفح بالنجاح
