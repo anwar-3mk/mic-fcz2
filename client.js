@@ -286,8 +286,8 @@ socket.on('positions_updated', (allPlayers) => {
             Math.pow(player.pos.z - myPos.z, 2)
         );
 
-        const isNearby = (d < 60);
-        const onSameRadio = (myFreq && myFreq === player.frequency);
+        const isNearby = (d < 100);
+        const onSameRadio = (myFreq && myFreq !== null && myFreq !== undefined && myFreq === player.frequency);
 
         if (isNearby || onSameRadio) {
             // إدراج اللاعبين القريبين في واجهة المتصفح فقط
@@ -305,17 +305,33 @@ socket.on('positions_updated', (allPlayers) => {
                 peers[player.socketId] = createPeer(player.socketId, true);
             }
 
-            // --- [ حساب جودة إشارة أبراج الراديو ] ---
+            // --- [ حساب جودة إشارة أبراج الراديو التكتيكية ] ---
             const mySignal = myState.signalInfo || { closestTowerName: "None", distToTower: 99999, towerPos: {x:0, y:0, z:0} };
             const peerSignal = player.signalInfo || { closestTowerName: "None", distToTower: 99999, towerPos: {x:0, y:0, z:0} };
 
-            // التحقق من تواجد اللاعبين معاً داخل الدوائر الحمراء (القطر 5 بلاطات والمدى الأقصى للبرج هو نصف القطر 2.5)
-            const isMyPlayerInCircle = (mySignal.closestTowerName !== "None" && mySignal.distToTower <= 2.5);
-            const isPeerPlayerInCircle = (peerSignal.closestTowerName !== "None" && peerSignal.distToTower <= 2.5);
+            // حساب قوة إشارة اللاعب نفسه (الحد الأقصى للتغطية 20 بلاطة عن البرج)
+            let sigA = 0;
+            if (mySignal.closestTowerName !== "None") {
+                if (mySignal.distToTower <= 2.5) {
+                    sigA = 1.0; // نقي جداً داخل الدائرة
+                } else if (mySignal.distToTower <= 20) {
+                    sigA = 1.0 - (mySignal.distToTower - 2.5) / 17.5; // يتدرج للصفر عند 20 بلاطة
+                }
+            }
+
+            // حساب قوة إشارة القرين (الحد الأقصى للتغطية 20 بلاطة عن البرج)
+            let sigB = 0;
+            if (peerSignal.closestTowerName !== "None") {
+                if (peerSignal.distToTower <= 2.5) {
+                    sigB = 1.0;
+                } else if (peerSignal.distToTower <= 20) {
+                    sigB = 1.0 - (peerSignal.distToTower - 2.5) / 17.5;
+                }
+            }
 
             // حساب جودة الرابط الصوتي للراديو
             let transmissionQuality = 0;
-            if (isMyPlayerInCircle && isPeerPlayerInCircle) {
+            if (sigA > 0 && sigB > 0) {
                 let baseQuality = 1.0;
                 if (mySignal.closestTowerName !== peerSignal.closestTowerName) {
                     // تقليل جودة الاتصال بناءً على مسافة البرجين عن بعضهما (الحد الأقصى للتغطية البينية هو 550 بلاطة)
@@ -323,18 +339,17 @@ socket.on('positions_updated', (allPlayers) => {
                         Math.pow(mySignal.towerPos.x - peerSignal.towerPos.x, 2) +
                         Math.pow(mySignal.towerPos.z - peerSignal.towerPos.z, 2)
                     );
-                    // جودة تدرجية بين 1.0 (صافي) إلى 0.12 (مغبش لاسلكي وصوت ضعيف ومفهوم بصعوبة)
                     baseQuality = Math.max(0.12, 1.0 - (towerDist / 550));
                 }
-                transmissionQuality = baseQuality;
+                transmissionQuality = baseQuality * sigA * sigB;
             } else {
-                transmissionQuality = 0; // مقطوع بالكامل إذا كان أحد الطرفين خارج أي دائرة حمراء
+                transmissionQuality = 0; // مقطوع بالكامل إذا خرج أحدهما عن مدى الـ 20 بلاطة للبرج
             }
 
-            // حساب مستوى الصوت المحيطي الطبيعي (يعمل في أي مكان بشكل مستقل عن الأبراج)
+            // حساب مستوى الصوت المحيطي الطبيعي (يعمل في أي مكان بشكل مستقل عن الأبراج ليكون 100 بلاطة)
             let proximityVolume = 0;
             if (isNearby && !player.isMuted) {
-                proximityVolume = Math.pow(Math.max(0, 1 - (d / 60)), 0.6);
+                proximityVolume = Math.pow(Math.max(0, 1 - (d / 100)), 0.6);
             }
 
             // حساب مستوى صوت الراديو (يتأثر بالأبراج والمسافة)
